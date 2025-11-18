@@ -73,68 +73,46 @@ Os PDFs carregados pelo usuário constituem a base de conhecimento utilizada pel
 
 ## 2. Diagrama do Grafo do LangGraph
 
-O LangGraph define o fluxo de trabalho do agente, onde o estado é compartilhado por todos os usuários (simulando colaboração em tempo real via Firestore).
+Nós principais:
 
-### Estado do Grafo (AgentState)
+- log_action (Comunicação)
+  - Registra a última mensagem de usuário no log (user_actions).
 
-| Campo     | Tipo              | Descrição |
-|-----------|-------------------|-----------|
-| messages  | List[BaseMessage] | Histórico da conversa (Comunicação) |
-| board     | str               | Plano do Evento sendo construído (Colaboração) |
-| stage     | Literal           | Fase do projeto: *brainstorm*, *research*, *draft*, *review* (Coordenação) |
-| user_id   | str               | Usuário que gerou a ação atual |
-| context   | str               | Contexto RAG recuperado |
+- coordination_router (Coordenação)
+  - Decide o próximo passo com base na etapa (stage):
+    - brainstorm / draft → synthesis
+    - research → rag_retrieval → synthesis
+    - review → review_decision
 
----
+- rag_retrieval (Ferramenta / RAG)
+  - Usa pdf_rag_search para buscar trechos relevantes nos PDFs indexados com FAISS + embeddings locais.
 
-### Nós e Arestas
+- synthesis (Colaboração)
+  - Chama o LLM (Gemini) com:
+    - histórico da conversa,
+    - estágio atual,
+    - plano atual (board),
+    - contexto dos PDFs (quando houver).
+  - Atualiza o board com a resposta do agente.
 
-#### Ações (Nós)
-
-| Nó (Action) | Função |
-|-------------|--------|
-| **rag_retrieval** | Busca informações relevantes nos PDFs (RAG) |
-| **synthesis** | Gera respostas, atualiza o board e sugere próximos passos |
-| **review_decision** | Consolida o plano final ou sugere ajustes |
-
----
-
-### Roteador (Coordination)
-
-#### coordination_router — Transições
-1. **rag_retrieval**  
-   - Se *stage* for `research`, ou  
-   - Se a mensagem contiver palavras-chave: “regulamento”, “orçamento”, “documento”, “PDF”.
-2. **synthesis**  
-   - Em qualquer outro caso.
-
-#### end_router — Transições
-1. **review_decision**  
-   - Se *stage* for `review` **e** o plano estiver pronto.
-2. **synthesis**  
-   - Caso sejam necessários ajustes.
-
----
+- review_decision (Colaboração + Coordenação)
+  - Na etapa de revisão, o LLM faz uma “auditoria” do plano atual, aponta melhorias e ajustes finais.
 
 ### Fluxo Principal (Grafo)
 
 ```mermaid
 graph TD
-    A[Início: Mensagem do Usuário] --> B{coordination_router};
+    START --> A[log_action]
+    A --> B[coordination_router]
 
-    B -- RAG Requisitado --> C(rag_retrieval: Ferramenta de Busca em PDF);
-    C --> D(synthesis: Agente LLM - Resposta e Atualização do Board);
+    B -->|stage == research| C[rag_retrieval]
+    B -->|stage == brainstorm/draft| D[synthesis]
+    B -->|stage == review| E[review_decision]
 
-    B -- Construção/Resposta Padrão --> D;
-
-    D --> E{end_router};
-
-    E -- Necessita Revisão/Ajuste --> D;
-    E -- Fechamento (Stage 'review') --> F(review_decision: Agente LLM - Consolidação Final);
-
-    F --> G[Fim da Etapa/Ciclo];
+    C --> D
+    D --> END
+    E --> END
 ```
-
 ---
 
 ## 3. Abordagem dos Princípios 3C
